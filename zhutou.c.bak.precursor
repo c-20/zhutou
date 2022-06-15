@@ -1,0 +1,1591 @@
+#if 0
+# //gcc="ftlibtool --mode=link gcc"
+gcc=gcc
+src=zhutou.c
+out=zhutou.e
+ft2="../ft2"
+ft2include="$ft2/include"
+inc="-I$ft2include -I$ft2"
+libs="-lz -lpng16 -lX11 -lm"
+ft2objs="$ft2/common.o $ft2/strbuf.o $ft2/output.o $ft2/mlgetopt.o"
+ft2objs+=" $ft2/ftcommon.o $ft2/libfreetype.so $ft2/graph.a"
+objs="$ft2objs"
+$gcc -o $out $inc $src $objs $libs
+exit 0
+#else
+#include <ftcommon.h>
+#include <common.h>
+#include <mlgetopt.h>
+
+// comment out once debugged
+#include <freetype/internal/ftdebug.h>
+
+#include FT_MODULE_H
+#include <freetype/internal/ftobjs.h>
+#include <freetype/internal/ftdrv.h>
+
+#include FT_STROKER_H
+#include FT_SYNTHESIS_H
+#include FT_LCD_FILTER_H
+#include FT_DRIVER_H
+#include FT_COLOR_H
+#include FT_BITMAP_H
+
+//#ifdef _WIN32 //  double-check WIN32 AND _WIN32
+#ifdef _WIN32
+#define snprintf _snprintf
+#endif
+
+static int LCDModes[] = {
+  LCD_MODE_MONO, LCD_MODE_AA, LCD_MODE_LIGHT, LCD_MODE_RGB,
+  LCD_MODE_BGR,  LCD_MODE_VRGB, LCD_MODE_VBGR			};
+#define LCDModesLEN   ((int)(sizeof(LCDModes) / sizeof(int)))
+
+enum { RENDER_MODE_ALL = 0, RENDER_MODE_FANCY, RENDER_MODE_STROKE,
+       RENDER_MODE_TEXT, RENDER_MODE_WATERFALL, N_RENDER_MODES	};
+
+#define VDT  void
+#define UCT  unsigned char
+#define CH   char // not const .....
+#define CST  const char *
+#define INT  int
+#define UNT  unsigned int
+#define FPT  double
+#define XPT  FT_Fixed
+#define YNT  FT_Bool
+#define ERT  FT_Error
+#define FAT  FT_Face
+#define GST  FT_GlyphSlot
+#define GLT  FT_Glyph
+#define UIT  FT_UInt
+#define SVDT static VDT
+#define SCST static CST
+#define SERT static ERT
+#define SINT static INT
+// UNT -> UIT ?
+
+#define IF  if
+#define EF  else if
+#define EL  else
+#define DO  do
+#define WI  while
+#define BK  break
+#define CT  continue
+#define RT  return
+#define INC ++
+#define DEC --
+#define LT  <
+#define GT  >
+#define LQ  <=
+#define GQ  >=
+#define EQ  ==
+#define NQ  !=
+#define CS char * // not constant ....
+#define NUL  '\0'
+#define AND &&
+#define OR  ||
+
+
+// it is expected that DOSTART starts within a condition
+// DOUNTIL will end the single-iteration loop and the condition
+// this allows break; for early exit with proper { cleanup(); }
+#define DOSTART      do {
+#define AFTERDO      } while(0); }
+#define ELSEDO       else { DOSTART
+// NOTE THAT AFTERDO CLOSES THE CONDITION BUT THERE IS NO DIFFERENCE
+// BETWEEN THE END OF THE CONDITION BLOCK AND AFTER THE CONDITION BLOCK
+// THE BRACES OF AFTERDO ARE OPTIONAL
+//FILE *file = fopen(filename, "r");
+//if (!file) {
+//  // return error message and code
+//} ELSEDO
+//  // file is open
+//  // do things
+//  AFTERDO { fclose(file); }
+//}
+
+
+/*
+static struct status_ {
+  INT update, rendermode;
+  CST keys;
+  CST dims;
+  CST device;
+  INT res, ptsize, lcdix;
+  FPT xbold, ybold, radius, slant;
+  UNT cffhint, type1hint, t1cidhint;
+  UNT ttinterpreterversions[3];
+  INT numttinterpreterversions;
+  INT ttinterpreterversionidx;
+  //TFT warping;
+  INT fontix, offset, topleft, fails, preload;
+  INT lcdfilter;
+  UCT lcdfilterweights[5];
+  INT lcdfilterweightidx;
+} status = {
+   1, RENDER_MODE_TEXT, //ALL,         // update, rendermode
+  "", DIM, NULL,               // keys, dims, device
+  72, 48, 1,                   // res, ptsize, lcdix
+  0.04, 0.04, 0.02, 0.22,      // xbold, ybold, radius, slant
+  0, 0, 0,                     // cffhint, type1hint, t1cidhint
+  { 0 }, 0, 0,                 // [num]ttinterpreterversion[s,idx]
+//  0,                           // warping
+  0, 0, 0, 0, 0,               // fontix, offset, topleft, numfails, preload
+  FT_LCD_FILTER_DEFAULT,       // lcdfilter
+  { 0x08, 0x4D, 0x56, 0x4D, 0x08 }, 2 // lcdfilterweight[s,idx]
+};
+*/
+
+#define FONT0PATH "./ukai.ttf"
+#define FONT1PATH "../EmojiOne/EmojiOneColor.otf"
+#define FONT2PATH "../OpenSansEmoji/OpenSansEmoji.ttf"
+
+#define SETFONT1  ">SETFONT 1 FONT1PATH<"
+#define SETFONT2  ">SETFONT 2 FONT2PATH<"
+
+#define FONT1     ">SETFONT 1<"
+#define FONT2     ">SETFONT 2<"
+
+#define ZHU  "\xE7\x8C\xAA" // 猪
+#define TOU  "\xE5\xA4\xB4" // 头
+
+#define SPACE      " "
+#define LINEBREAK  "\n"
+//#define LINEBREAK  "\x0a"
+
+#define MA    "\xe0\xb8\xa1\xe0\xb8\xb2" //
+#define LAEW  "\xe0\xb9\x81\xe0\xb8\xa5\xe0\xb9\x89\xe0\xb8\xa7" // 
+#define KHA   "\xe0\xb8\x84\xe0\xb9\x88\xe0\xb8\xb0" // 
+#define MALAEWKHA_UTF  MA LAEW KHA
+#define MALAEWKHA_UNI  "มาแล้วค่ะ"
+#define MALAEWKHA_ASC  "`8!`82`9`8%`9	`8'`8`9`80"
+#define MALAEWKHA_STR  "ma laew kha"
+#define MALAEWKHA_ENG  "here it is"
+//#define INITIALTEXT \
+//  "\xE4\xBD\xA0\xE8\xBF\x98\xE7\x88\xB1\xE6\x88\x91\xE5\x90\x97\xEF\xBC\x9F"
+
+//SCST Text = ZHU TOU ZHU TOU ZHU TOU;
+//#define INITIALTEXT    ZHU TOU ZHU TOU LINEBREAK MALAEWKHA_UTF
+#define CONNECTION    "\xf0\x9f\x93\xb6"
+#define MICROPHONE    "\xf0\x9f\x8e\xa4"
+#define SPEAKER       "\xf0\x9f\x94\x89"
+//static CST j ZHUTOU = ZHU TOU;
+#define ZHUTOU ZHU TOU
+//static const char const *ZHUTOU = ZHU TOU;
+
+//#define INITIALTEXT   CONNECTION SPACE MICROPHONE SPACE SPEAKER
+//#define TEXTSEQUENCE        \
+//SETFONT1 SETFONT2           \
+//FONT1 INITIALTEXT LINEBREAK \
+//FONT2 INITIALTEXT
+
+#define WORDMATCH(str, match)     (strcmp(str, match) == 0)
+
+typedef struct _Translation {
+  CST sequence;
+  struct _Translation *next;
+} Translation;
+
+typedef struct _Translations {
+  Translation first;
+  INT selectionindex;
+  INT totalitems;
+} Translations;
+
+Translations onetranslation(CST sequence) {
+  Translation t = { sequence: sequence, next: NULL };
+  Translations ts = { first: t, selectionindex: 0, totalitems: 1 };
+  return ts;
+}
+
+Translations twotranslations(CST seq1, CST seq2) {
+  Translation t1 = { sequence: seq1, next: NULL };
+  Translation *t2 = malloc(sizeof(Translation));
+  t2->sequence = seq2;
+  t2->next = NULL;
+  t1.next = t2;
+  Translations ts = { first: t, selectionindex: 0, totalitems: 2 };
+  return ts;
+}
+
+VD freetranslations(Translations menu) {
+  Translation *t = &menu.first;
+  WI (t->next) {
+    Transation *nextt = t->next;
+    IF (t != &menu.first) {
+      free(t);
+    } // first item is static
+    t = nextt;
+  }
+}
+
+//Translations notranslations() {
+//  return translationmenu(ZHUTOU);
+//}
+const Translation  ZhuTou         = { sequence: ZHUTOU, next: NULL };
+const Translations NoTranslations = { first: ZhuTou, selectionindex: 0, totalitems: 1 };
+
+Translations translatemnemonic(CS word) {
+  IF WORDMATCH(word, "CONNECTION" ) { RT onetranslation(CONNECTION);    }
+  EF WORDMATCH(word, "MICROPHONE" ) { RT onetranslation(MICROPHONE);    }
+  EF WORDMATCH(word, "SPEAKER"    ) { RT onetranslation(SPEAKER   );    }
+  EF WORDMATCH(word, "MA LAEW KHA") { RT onetranslation(MALAEWKHA_UTF); }
+  EF WORDMATCH(word, "ZHU-TOU"    ) { RT ZhuTou; } // invalid!NoTranslations!
+  EF WORDMATCH(word, "ZHU TOU"    ) { RT ZhuTou; } // invalid!NoTranslations!
+  EL { RT NoTranslations; } // notranslations(); }
+} // for zhutou, draw a zhutou instead
+
+#define HASNOTRANSLATIONS(menu) \
+  (menu.first.sequence == ZHUTOU)
+
+static struct status_ {
+  INT update;
+  INT fails;
+//  CST textcontent;
+//  INT pixelwidth;
+//  INT pixelheight;
+//  INT textmarginleftx;
+//  INT textmargintopy;
+  //INT xincrement;
+  //INT yincrement;
+} status = {
+  1   , // update
+  0//   , // fails
+//  INITIALTEXT, // textcontent
+//  Text, // textcontent
+//  150 , // pixelwidth
+//  150 , // pixelheight
+//  10  , // textmarginleftx
+//  10    // textmargintopy
+};
+
+#define TEXTSTRINGSIZE       1024
+// TODO: THIS WILL DEPEND ON DOCUMENT SIZE
+
+
+#define DEFAULTFONTWIDTH     120
+#define DEFAULTFONTHEIGHT    120
+#define DEFAULTTEXTMARGINX    10
+#define DEFAULTTEXTMARGINY    10
+#define DEFAULTFONTSIZE      fontwidth: DEFAULTFONTWIDTH, \
+                            fontheight: DEFAULTFONTHEIGHT
+#define DEFAULTTEXTMARGIN   textmarginx: DEFAULTTEXTMARGINX, \
+                            textmarginy: DEFAULTTEXTMARGINY
+
+#define EMOJIFONTWIDTH       150
+#define EMOJIFONTHEIGHT      150
+#define EMOJIFONTSIZE        fontwidth: EMOJIFONTWIDTH, \
+                            fontheight: EMOJIFONTHEIGHT
+#define LANGUAGEFONTWIDTH     80
+#define LANGUAGEFONTHEIGHT    80
+#define LANGUAGEFONTSIZE     fontwidth: LANGUAGEFONTWIDTH, \
+                            fontheight: LANGUAGEFONTHEIGHT
+
+#define NOCOLOUR         'N'
+#define REDCOLOUR        'R'
+#define YELLOWCOLOUR     'Y'
+#define GREENCOLOUR      'G'
+#define CYANCOLOUR       'C'
+#define BLUECOLOUR       'B'
+#define MAGENTACOLOUR    'M'
+
+#define NEWCOLOUR        BLUECOLOUR
+#define EMPTYCOLOUR      CYANCOLOUR
+#define MATCHCOLOUR      MAGENTACOLOUR
+#define NOMATCHCOLOUR    REDCOLOUR
+#define DONECOLOUR       GREENCOLOUR
+
+#define CIRCLE           'C'
+#define RECTANGLE        'R'
+#define ROUNDEDRECTANGLE 'O'
+
+#define OPACITYNONE      'N'
+#define OPACITYVERYLOW   'V'
+#define OPACITYLOW       'L'
+#define OPACITYMEDIUM    'M'
+#define OPACITYHIGH      'H'
+#define OPACITYFULL      'F'
+
+// array hold ....
+
+typedef struct _Hotkey {
+  CS keysequence; // "()" "(((EMOJI)))"
+  CS actioncommand;
+  CS actiontable; // command ...... or table .... or tablecache ....
+  // how to map to a hotkey action table .... might as well process as string
+  // and then do what
+// table comes from instance of use of hotkey ....
+} Hotkey;
+
+typedef struct _Region {
+//  Input inputs;
+//  Output outputs;
+  Hotkey hotkey;
+  INT index;
+  CS command; // actiontable is different -- run command with emoji support, or, return an emoji
+//  IN topleftx;
+//  IN toplefty;
+  struct _Region *next;
+} Region;
+
+// todo: animations, and sound effects
+// [ ] to run a command
+// { } to create a program
+// ( ) to open a map -- (pinyin zhutou)  "( ^P ---"
+
+// so i guess this is to be the first self-editing program
+// need Highlight to know font of current range
+// many fonts, one size, at the moment ....
+// instead, maintain a list of Fontmodes ....
+//  language font mode, emoji font mode
+//F1{ukai.ttf:64x64} F2{emoji.ttf:128x128}
+//F3{F1:red} F4{F1:green} F5{F1:blue}
+
+typedef struct _Font {
+  CS filename;
+  INT width;
+  INT height;
+  FT_Face face;
+  struct _Font *next;
+} Font;
+
+typedef struct _Textbox {
+//  FT_Face *fontlist;
+//  INT numfonts;
+  FT_Library *ftlib;
+  Font font;
+//  INT fontindex;
+//  INT fontwidth;
+//  INT fontheight;
+  INT marginx;
+  INT marginy;
+  CS textstring;
+  INT textstringsize;
+  Region region;
+  // hotkeys ... for .... money
+} Textbox;
+
+Textbox newtextbox(FT_Library *ftlibp, INT marginx, INT marginy,
+                   CS fontpath, INT fontwidth, INT fontheight) {
+  Textbox t;
+  t.ftlib = ftlibp;
+  t.font.filename = fontpath;
+  t.font.width = fontwidth;
+  t.font.height = fontheight;
+  printf("LOADING FONT %s\n", t.font.filename);
+  error = FT_New_Face((*t.ftlib), t.font.filename, 0, &t.font.face);
+  if (error) { printf("FONTNEWFACEFAIL\n"); break; }
+  error = FT_Set_Pixel_Sizes(t.font.face, t.font.width, t.font.height);
+  if (error) { printf("FONTSETSIZEFAIL\n"); break; }
+  t.font.next = NULL; // one font loaded
+  t.marginx = marginx;
+  t.marginy = marginy;
+  t.textstringsize = TEXTSTRINGSIZE;
+  t.textstring = (CS)malloc(t.textstringsize + 1);
+  RT t;
+}
+
+VD freetextbox(Textbox *textbox) {
+//    INT donefontix = -1;
+//    WI (INC donefontix < numfonts) {
+//      printf("FTDONEFONT%d\n", donefontix);
+//      FT_Done_Face(fontface[donefontix]);
+//    }
+  Font *thisfont = &(textbox->font.face);
+  FT_Done_Face(thisfont->face); // expect FONT0 to be loaded
+  WI (thisfont->next) { // if FONT1, free, next nextfont
+    Font *nextfont = thisfont->next;
+    FT_Done_Face(nextfont->face);
+    thisfont = nextfont;
+  }
+  free(textbox->textstring);
+  textbox->ftlib = NULL;
+}
+
+typedef struct _Stencil {
+  Textbox *textbox; // sets font context and base margin, and has an optional background string
+  INT wordmarginx, wordmarginy;
+  FPT wordscale, wordscalex, wordscaley;
+
+  INT linebottom; // align top of subline
+  INT linecentre; // align middle of symbolword
+  INT wordwidth, wordheight; // derived from calculation by drawing with wordscale considered
+
+  CST textword; // only set for symbols
+  CH colour;
+  CH backgroundcolour;
+  CH backgroundshape;
+  CH backgroundopacity;
+  INT fontindexoverride;
+  struct _Stencil *next;
+} Stencil;
+
+/*
+SVDT Fatal(CST message) {
+  FTDemo_Display_Done(display);
+  FTDemo_Done(handle);
+  PanicZ(message);
+}
+*/
+
+// - smaller X
+// _ smaller Y
+// = larger  X
+// + larger  Y
+// ^- smaller XY
+// ^= larger  XY
+// ^_ more superscript
+// ^+ more subscript
+
+
+
+typedef struct _Text {
+  CS string;
+  CS cursorstart, cursorend;
+} Text;
+
+VDT writetextstring(Text *text, CST textstring) {
+  IF (!(text->string)) { LOG("not attached to textbox\n"); RT; }
+  sprintf(text->string, "%s", textstring); // overwrite string buffer
+  text->cursorstart = text->string;        // return to start
+  WI (*(text->cursorstart)) { text->cursorstart INC; } // move to end
+  text->cursorend = text->cursorstart;     // cursor is 0 chars wide
+}
+
+VDT appendtextstring(Text *text, CH appendchar) {
+  // if cursorend != cursorstart, we are overwriting a selection
+  IF (!(text->string) || !(text->cursorstart) || !(text->cursorend))
+    { LOG("cannot append NULL text\n"); return; }
+  // not currently checking that cursor is within string bounds
+  IF (appendchar == '\b') {
+    IF (text->cursorstart != text->cursorend) {
+      CS delfromhere = text->cursorstart;
+      CS deltohere   = text->cursorend;
+      IF (text->cursorend < text->cursorstart) {
+        delfromhere = text->cursorend;
+        deltohere   = text->cursorstart;
+      } // end-to-start and start-to-end backspace the same
+      CS overwrite     = delfromhere;
+      CS overwritewith = deltohere;
+      WI (*overwritewith) {
+        *overwrite = *overwritewith;
+        INC overwrite;
+        INC overwritewith;
+      } // overwrite selection with after-selection until \0
+      text->cursorstart = delfromhere;
+      text->cursorend   = delfromhere;
+    } EF (text->cursorend == text->cursorstart &&
+          text->cursorstart > text->string) { // if 0-width
+      CS overwritewith = textstring->cursorstart;
+      textstring->cursorstart DEC;
+//      *(textstring->cursorstart) = NUL; // needed on last char
+      textstring->cursorend = textstring->cursorstart;
+      CS overwrite     = textstring->cursorstart;
+      WI (*overwritewith) {
+        *overwrite = *overwritewith;
+        INC overwrite;
+        INC overwritewith;
+      } // overwrite selection with after-selection until \0
+      *overwrite = NUL; // re-tail the string
+//      text->cursorstart = delfromhere;
+//      text->cursorend   = delfromhere;
+      // all characters after this one need to be shifted left
+      // if cursorend is less than cursorstart, use cursorend
+    } // EL presumably cursor is at start of string
+  } EL { // write a char -- or overwrite selection then write
+    IF (text->cursorstart != text->cursorend) {
+      CS delfromhere = text->cursorstart;
+      CS deltohere   = text->cursorend;
+      IF (text->cursorend < text->cursorstart) {
+        delfromhere = text->cursorend;
+        deltohere   = text->cursorstart;
+      } // end-to-start and start-to-end backspace the same
+      IN charwidth = 1; // to write strings, allow width
+      CS overwrite     = delfromhere + charwidth;
+      CS overwritewith = deltohere;
+      // later if added width exceeds selection width .....
+      // then we need to move chars forward ->>> not back
+      // TESTING abc[def]gh -> abcTESTINGgh
+      // if added width equals selection width, no overwrite needed
+      // only tail overwrite if at end of string
+      WI (*overwritewith) {
+        *overwrite = *overwritewith;
+        INC overwrite;
+        INC overwritewith;
+      } // overwrite selection with after-selection until \0
+      *overwrite = NUL; // re-tail the string: overwriteend
+      CS writehere = delfromhere;
+      IN writechix = -1;
+      WI (INC writechix < charwidth) {
+        *writehere = appendchar; // TODO: string[writechix]
+        IF (INC writehere >= overwrite)
+          { *writehere = NUL; } // tail extended
+      } // currently only one iteration !
+      text->cursorstart = writehere;
+      text->cursorend   = writehere;
+      // cursor moves to end of written text
+      // string should already have a tail, ...
+      // unless charwidth exceeds the tail!
+    } EL { // text->cursorstart == text->cursorend
+//      CS overwrite = text->cursorstart;
+      CS writehere = text->cursorstart;
+      CS stringend = writehere;
+      WI (*stringend) { INC stringend; }
+      IN writechix = -1;
+      WI (INC writechix < charwidth) {
+        *writehere = appendchar; // TODO: string[writechix]
+        IF (INC writehere >= stringend)
+          { *writehere = NUL; } // tail extended
+      } // currently only one iteration !
+      text->cursorstart = writehere;
+      text->cursorend   = writehere;
+    }
+  }
+}
+//    *(textstring->cursorpointer) = appendchar;
+//    textstring->cursorpointer INC;
+//    *(textstring->cursorpointer) = NUL;
+
+#define CURSORWIDTH         2
+#define CURSORHEIGHT        12
+#define CURSORTOPMARGIN     1
+#define CURSORBOTTOMMARGIN  1
+#define CURSORMARGIN        (CURSORTOPMARGIN + CURSORBOTTOMMARGIN)
+
+#define FONTHEIGHTPX   (CURSORHEIGHT - CURSORMARGIN)
+#define FONTWIDTHPX    (FONTHEIGHTPX)
+
+typedef struct _Highlight {
+  INT charsbefore, charsafter;
+  INT leftwidth, rightwidth, height;
+  CS startpoint;
+  CS endpoint;
+  CS cursorpoint;
+  CH colour;
+  Translations menu;
+} Highlight;
+
+// ctrl+left, ctrl+right move within highlight
+// cannot move outside edge, use left or right to break highlight
+
+//#define nohighlight()                                             \
+//  (Highlight)
+#define TEN 10
+const Highlight NoHighlight = { charsbefore: 0, charsafter: 0,
+               leftwidth: 0, rightwidth: CURSORWIDTH, height: TEN,
+               NULL, NULL, NULL, EMPTYCOLOUR,
+               NoTranslations                                     };
+//               notranslations()                                   }
+
+
+
+//SERT
+//VD alignhighlight(grBitmap *sbitmap, Textbox textbox) {
+//VD alignhighlight(grBitmap *sbitmap, Highlight *highlight, Textbox *textbox) {
+// source sbitmap bounds? should be no need
+VD alignhighlight(Highlight *highlight, Textbox *textbox) {
+//FT_Face *ftface) { //, CST srctext) { //RenderStroke(INT numindices, INT offset) {
+  // where is error defined?
+  IF (!textbox || !highlight)
+    { printf("ALIGNHIGHLIGHT NOCONTEXT\n"); RT; }
+  CST srctext = highlight->startpoint;
+  CST srcstop = highlight->endpoint;
+  CST srcnext = highlight->cursorpoint; // consider multiple cursor points
+  IF (!srctext || !srcstop || !srcnext)
+    { printf("ALIGNHIGHLIGHT NOHIGHLIGHT\n"); RT; }
+  INT leftwidth = 0;
+  INT rightwidth = 0;
+//  CST srctext = textbox.textstring;
+//  CST srctext = status.textcontent;
+// actual srcbmp may be a different size !
+// each actual glyph may be a different size !
+//  error = FT_Set_Pixel_Sizes(*ftface, status.pixelwidth, status.pixelheight);
+//  FT_Face *thisface = &(textbox->fontlist[textbox->fontindex]);
+  FT_Face *thisface = &(textbox->font.face);
+
+
+//  error = FT_Set_Pixel_Sizes(*thisface, textbox->fontwidth, textbox->fontheight);
+// MOVED TO FONT INIT
+// this should be set once per font instance not once per frame render
+
+ // WIDTH AND HEIGHT !!!!!
+//  if (error) { printf("ALIGNHIGHLIGHT SETPIXELSIZES ERROR\n"); return; } // <- unsafe exit.. break?
+
+//  FT_Size size;
+//  error = FTDemo_Get_Size(handle, &size);
+//  if (error) { printf("GETSIZEFAIL\n"); return error; } // non-existent font size
+//  INT xstart = START_X;
+//  INT ystart = CEIL(size->metrics.ascender - size->metrics.descender) + START_Y;
+//  INT ystep  = CEIL(size->metrics.height) + 4;
+  INT xstart = 0; //textbox.textmarginx;
+  INT ystart = 0; //textbox.textmarginy;
+  INT x = xstart;
+  INT y = ystart;
+//  FAT face = size->face;
+//  GST slot = face->glyph;
+//  XPT radius = (XPT)(size->metrics.y_ppem * 64 * status.radius);
+//  FT_Stroker_Set(handle->stroker, radius, FT_STROKER_LINECAP_ROUND, FT_STROKER_LINEJOIN_ROUND, 0);
+//  YNT havetopleft = 0;
+  CST textp = srctext;
+  CST textend = srcstop; //textp + strlen(srctext);
+  INT aftercursor = 0;
+  //INT i = offset - 1;
+  //while (++i < numindices) {
+  UIT lastglyphix = 0;
+  INT ch = 0;
+  INT spacewidth = textbox->font.width >> 1;
+//textbox->fontwidth >> 1;
+  INT lineheight = textbox->font.height;
+//textbox->fontheight;
+//#define SPACEWIDTH  (textbox.fontwidth >> 1)
+//#define LINEHEIGHT  (textbox.fontheight)
+  // FT_Uint32
+  if (textp == textend) {
+    rightwidth = CURSORWIDTH;
+  } // no highlight width, expect 0 0 from the loop
+
+  while (ch >= 0) { // loop until done
+    ch = utf8_next(&textp, textend);
+    if (!aftercursor && textp > srcnext) {
+      printf("JUMPED OVER CURSOR\n");
+      aftercursor = 1;
+    } else if (!aftercursor && textp == srcnext) {
+      aftercursor = 1; // saw cursor
+    } // else we are beforecursor
+    if (ch < 0) { printf("HLEOF\n"); break; } // don't write EOF
+    if (ch == 0) { printf("HLNUL\n"); break; } // or NUL
+
+    if (ch == '\n') { printf("HLNEWLINE\n"); break; } // or \n
+// cannot handle linebreaks yet
+//  cursor can be anywhere on any line
+//   so leftwidth and rightwidth need overflow
+//   unless we add a third extralines property
+//   in which case, leftwidth becomes topline width...
+//   and rightwidth becomes bottomline width...
+// consider tho that not all lines are full width .......
+
+    if (ch == ' ' ) {
+      x += spacewidth + 1;
+      IF (aftercursor)
+        { rightwidth += spacewidth + 1; }
+      EL { leftwidth += spacewidth + 1; }
+      continue;
+    }
+
+//    if (ch == '\n') { x = xstart; y += LINEHEIGHT; continue; }
+    UIT glyphix = FT_Get_Char_Index(*thisface, ch);
+    if (glyphix == 0) { printf("MISSINGGLYPH\n"); } // continue anyway..
+//    UIT glyphix = FTDemo_Get_Index(handle, (FT_UInt32)ch); // <----- unsigned int?
+printf("HLch is %d, glyphix is %d\n", ch, glyphix);
+//    error = FT_Load_Glyph(face, glyphix, handle->load_flags | FT_LOAD_NO_BITMAP);
+//    error = FT_Load_Glyph(*ftface, glyphix, FT_LOAD_DEFAULT);
+    error = FT_Load_Glyph(*thisface, glyphix, FT_LOAD_RENDER | FT_LOAD_COLOR);
+    IF (error) { printf("LOADGLYPHFAIL\n"); }
+    ELSEDO
+//      error = FT_Render_Glyph(glyphix, FT_RENDER_MODE_NORMAL);
+
+    FT_Bitmap *srcbmp = &(*thisface)->glyph->bitmap;
+//      grColor white;
+//      memset(&white, 0xFF, sizeof(grColor));
+      
+//      grBlitGlyphToBitmap(sbitmap, srcbmp, x, y, white);
+//    printf("srcbmp w: %d h: %d\n", srcbmp->width, srcbmp->rows);
+//    printf("sbitmap w: %d h: %d\n", sbitmap->width, sbitmap->rows);
+//    printf("srcbmp pitch: %d\n", srcbmp->pitch);
+//    printf("sbitmap pitch: %d\n", sbitmap->pitch);
+//      while (dy <= y + srcbmp->rows) {
+//        while (dx <= x + srcbmp->width) {
+//printf("X, Y: %d, %d\n", x, y);
+    int thischarheight = (*thisface)->glyph->metrics.height >> 6;
+    int thischarwidth  = (*thisface)->glyph->metrics.width  >> 6;
+    int thischarvertbearingy = (*thisface)->glyph->metrics.vertBearingY >> 6;
+    int thischarvertadvance = (*thisface)->glyph->metrics.vertAdvance >> 6;
+
+    int thischarbmpwidth  = srcbmp->width;
+    int thischarbmpheight = srcbmp->rows;
+    int thischarsnips = thischarwidth - thischarbmpwidth;
+
+fprintf("HLch %d (glyphix %d) snips %d\n", ch, glyphix, thischarsnips);
+
+// so ... expect thischarheight to always be more than srcbmp->rows (extra descender pixels)
+// instead of fontheight ... actually to fontheight .. add a lineheightoffset ....
+
+//    int dy = y;
+//    while (dy < (y + srcbmp->rows)) {
+//      int dx = x;
+//      while (dx < (x + srcbmp->width)) {
+////        int gravityy = dy + (textbox.fontheight - srcbmp->rows);
+//
+////        int gravityy = dy + (textbox.fontheight - thischarvertadvance + thischarvertbearingy); // totalheight); //srcbmp->rows);
+//        int gravityv = lineheight - thischarvertadvance + thischarvertbearingy;
+//        int gravityy = dy + gravityv;
+//); // totalheight); //srcbmp->rows);
+//        int targetix = (gravityy * sbitmap->pitch) + dx;
+//        int sourceix = ((dy - y) * srcbmp->pitch) + (dx - x);
+////        printf("%d <--- %d\n", targetix, sourceix);
+////printf("SOURCEPIXEL: %d\n", srcbmp->buffer[sourceix]);
+//        sbitmap->buffer[targetix] = srcbmp->buffer[sourceix];
+//        dx++;
+//      }
+//      dy++;
+//    }
+
+
+//      x += srcbmp->width;
+
+
+
+//printf("CRASHTESTECHO\n");
+//      if (x + srcbmp->width >= sbitmap->width) {
+//        x = xstart;
+//        y += srcbmp->rows; // height; // MINUS?  // = srcbmp->height; // or rows?
+//      } else { x += srcbmp->width; }
+    IF (FT_HAS_KERNING(*thisface)) {
+      FT_Vector kernpixels = { x: srcbmp->width + 1, y: srcbmp->rows + 1 }; // bitmap size + 1 pixel by default
+      error = FT_Get_Kerning(*thisface, lastglyphix, glyphix, FT_KERNING_DEFAULT, &kernpixels);
+      if (error) { printf("GETKERNINGERROR\n"); } // continue anyway (hope it didn't update if it failed)
+  printf("KERNPIXELSX: %ld\n", kernpixels.x);
+      x += kernpixels.x; // partial pixels ...
+      IF (aftercursor)
+        { rightwidth += kernpixels.x; } // + 1 ?
+      EL { leftwidth += kernpixels.x; } // + 1 ?
+      // use y kerning to set maximum line height ? no ... .. irrelevant info unless vertical text
+    } else {
+  printf("NOKERNINGINTHISFONT\n");
+//      x += srcbmp->width + 1;
+      x += thischarbmpwidth + 1; // one pixel gap !
+      IF (aftercursor)
+        { rightwidth += thischarbmpwidth + 1; }
+      EL { leftwidth += thischarbmpwidth + 1; }
+    }
+    lastglyphix = glyphix;
+
+    // ^^ indented
+    AFTERDO { } // FT_Done_Glyph only for FT_Get_Glyph? // free srcbmp ?!?!?!
+  }
+  printf("DONEALIGNLIGHLIGHT\n");
+  highlight->leftwidth = leftwidth;
+  highlight->rightwidth = rightwidth;
+  highlight->height = thischarbmpheight;
+//  highlight->snipheight = thischarheight - thischarbmpheight;
+  // not checking y-snips (but could use for underline)
+  return 0;
+}
+
+// alignhighlight above ... uses Highlight... and Textbox ...
+
+
+SERT rendertext(grBitmap *sbitmap, Textbox *textbox) {
+//FT_Face *ftface) { //, CST srctext) { //RenderStroke(INT numindices, INT offset) {
+  // where is error defined?
+  CST srctext = textbox->textstring;
+//  CST srctext = status.textcontent;
+// actual srcbmp may be a different size !
+// each actual glyph may be a different size !
+//  error = FT_Set_Pixel_Sizes(*ftface, status.pixelwidth, status.pixelheight);
+//  FT_Face *thisface = &textbox.fontlist[textbox.fontindex];
+  FT_Face *thisface = &(textbox->font.face);
+  // font 0 for now TODO multifont
+//  error = FT_Set_Pixel_Sizes(*thisface, textbox.fontwidth, textbox.fontheight);
+ // WIDTH AND HEIGHT !!!!!
+//  if (error) { printf("SETPIXELSIZES ERROR\n"); return 3; } // <- unsafe exit.. break?
+// MOVED TO FONT INIT........
+//  FT_Size size;
+//  error = FTDemo_Get_Size(handle, &size);
+//  if (error) { printf("GETSIZEFAIL\n"); return error; } // non-existent font size
+//  INT xstart = START_X;
+//  INT ystart = CEIL(size->metrics.ascender - size->metrics.descender) + START_Y;
+//  INT ystep  = CEIL(size->metrics.height) + 4;
+  INT xstart = textbox.marginx;
+  INT ystart = textbox.marginy;
+  INT x = xstart;
+  INT y = ystart;
+//  FAT face = size->face;
+//  GST slot = face->glyph;
+//  XPT radius = (XPT)(size->metrics.y_ppem * 64 * status.radius);
+//  FT_Stroker_Set(handle->stroker, radius, FT_STROKER_LINECAP_ROUND, FT_STROKER_LINEJOIN_ROUND, 0);
+//  YNT havetopleft = 0;
+  CST textp = srctext;
+  CST textend = textp + strlen(srctext);
+  //INT i = offset - 1;
+  //while (++i < numindices) {
+  UIT lastglyphix = 0;
+  INT ch = 0;
+  INT spacewidth = textbox->font.width >> 1; // half a char
+  INT lineheight = textbox->font.height;
+//#define SPACEWIDTH  (textbox.fontwidth >> 1)
+//#define LINEHEIGHT  (textbox.fontheight)
+  // FT_Uint32
+  while (ch >= 0) { // loop until done
+    ch = utf8_next(&textp, textend);
+    if (ch < 0) { printf("EOF\n"); break; } // don't write EOF
+    if (ch == 0) { printf("NUL\n"); break; } // or NUL
+    if (ch == ' ' ) { x += spacewidth + 1; continue; }
+    if (ch == '\n') { x = xstart; y += lineheight + 1; continue; }
+
+    UIT glyphix = FT_Get_Char_Index(*thisface, ch);
+    if (glyphix == 0) { printf("MISSINGGLYPH\n"); } // continue anyway..
+//    UIT glyphix = FTDemo_Get_Index(handle, (FT_UInt32)ch); // <----- unsigned int?
+printf("ch is %d, glyphix is %d\n", ch, glyphix);
+
+//    error = FT_Load_Glyph(face, glyphix, handle->load_flags | FT_LOAD_NO_BITMAP);
+//    error = FT_Load_Glyph(*ftface, glyphix, FT_LOAD_DEFAULT);
+    error = FT_Load_Glyph(*thisface, glyphix, FT_LOAD_RENDER | FT_LOAD_COLOR);
+    if (error) { printf("LOADGLYPHFAIL\n"); }
+    ELSEDO
+//      error = FT_Render_Glyph(glyphix, FT_RENDER_MODE_NORMAL);
+
+    FT_Bitmap *srcbmp = &(*thisface)->glyph->bitmap;
+//      grColor white;
+//      memset(&white, 0xFF, sizeof(grColor));
+      
+//      grBlitGlyphToBitmap(sbitmap, srcbmp, x, y, white);
+//    printf("srcbmp w: %d h: %d\n", srcbmp->width, srcbmp->rows);
+//    printf("sbitmap w: %d h: %d\n", sbitmap->width, sbitmap->rows);
+//    printf("srcbmp pitch: %d\n", srcbmp->pitch);
+//    printf("sbitmap pitch: %d\n", sbitmap->pitch);
+//      while (dy <= y + srcbmp->rows) {
+//        while (dx <= x + srcbmp->width) {
+//printf("X, Y: %d, %d\n", x, y);
+    int thischarheight = (*thisface)->glyph->metrics.height >> 6;
+    int thischarwidth  = (*thisface)->glyph->metrics.width  >> 6;
+    int thischarvertbearingy = (*thisface)->glyph->metrics.vertBearingY >> 6;
+    int thischarvertadvance = (*thisface)->glyph->metrics.vertAdvance >> 6;
+// so ... expect thischarheight to always be more than srcbmp->rows (extra descender pixels)
+// instead of fontheight ... actually to fontheight .. add a lineheightoffset ....
+    int dy = y;
+    while (dy < (y + srcbmp->rows)) {
+      int dx = x;
+      while (dx < (x + srcbmp->width)) {
+//        int gravityy = dy + (textbox.fontheight - srcbmp->rows);
+
+        int gravityy = dy + (textbox.fontheight - thischarvertadvance + thischarvertbearingy); // totalheight); //srcbmp->rows);
+        int targetix = (gravityy * sbitmap->pitch) + dx;
+        int sourceix = ((dy - y) * srcbmp->pitch) + (dx - x);
+//        printf("%d <--- %d\n", targetix, sourceix);
+//printf("SOURCEPIXEL: %d\n", srcbmp->buffer[sourceix]);
+        sbitmap->buffer[targetix] = srcbmp->buffer[sourceix];
+        dx++;
+      }
+      dy++;
+    }
+
+
+//      x += srcbmp->width;
+
+
+
+//printf("CRASHTESTECHO\n");
+//      if (x + srcbmp->width >= sbitmap->width) {
+//        x = xstart;
+//        y += srcbmp->rows; // height; // MINUS?  // = srcbmp->height; // or rows?
+//      } else { x += srcbmp->width; }
+    IF (FT_HAS_KERNING(*thisface)) {
+      FT_Vector kernpixels = { x: srcbmp->width + 1, y: srcbmp->rows + 1 }; // bitmap size + 1 pixel by default
+      error = FT_Get_Kerning(*thisface, lastglyphix, glyphix, FT_KERNING_DEFAULT, &kernpixels);
+      if (error) { printf("GETKERNINGERROR\n"); } // continue anyway (hope it didn't update if it failed)
+  printf("KERNPIXELSX: %ld\n", kernpixels.x);
+      x += kernpixels.x; // partial pixels ...
+      // use y kerning to set maximum line height ? no ... .. irrelevant info unless vertical text
+    } else {
+  printf("NOKERNINGINTHISFONT\n");
+      x += srcbmp->width + 1;
+    }
+    lastglyphix = glyphix;
+    AFTERDO { } // FT_Done_Glyph only for FT_Get_Glyph? // free srcbmp ?!?!?!
+  }
+  printf("DONETEXT\n");
+  return 0;
+}
+//      INT width  srcbmp->width;
+//      if (x + srcbmp->width >= sbitmap->width) {
+//        x = xstart;
+//        y += srcbmp->height; // or rows?
+//      } else { x += srcbmp->width; }
+//    AFTERDO
+//    AFTERDO { FT_Done_Glyph(.....); }
+/*
+//    if (!error && slot->format == FT_GLYPH_FORMAT_OUTLINE) {
+      GLT glyph;
+      error = FT_Get_Glyph(slot, &glyph);
+      if (error) { printf("GETGLYPHFAIL\n"); status.fails++; break; }
+      ELSEDO
+      else do {
+        grBitmap srcbmp;
+        // FTDemo_Index_To_Bitmap .........
+        // we have a glyph
+        grColor white;
+        memset(&white, 0xFF, sizeof(grColor));
+        grBlitGlyphToBitmap(sbitmap, srcbmp, x, y, white);
+      }
+FTDemo_Display->forecolor
+//        error = FT_Glyph_Stroke(&glyph, handle->stroker, 1);
+*/
+/*
+        if (error) { printf("GLYPHSTROKEFAIL"); status.fails++; break; }
+        INT width = slot->advance.x ? slot->advance.x >> 6 : size->metrics.y_ppem / 2;
+        if (x + width >= display->bitmap->width) {
+          x = xstart;
+          y += ystep;
+          if (y > display->bitmap->rows)
+            { printf("ENDOFSCREEN"); status.fails++; break; }
+        }
+        x++; // add an extra pixel of space per glyph
+        if (slot->advance.x == 0) {
+          // FT_Color
+printf("NOADVANCE\n");
+//          grFillRect(display->bitmap, x, y - width, width, width, white);
+//display->warn_color);
+          x += width;
+        }
+//        grColor white = { 0xFF }; // { 0xFF, 0xFF, 0xFF }; // , 0xFF };
+        error = FTDemo_Draw_Glyph(handle, display, glyph, &x, &y);
+//        error = FTDemo_Draw_Glyph_Color(handle, display, glyph, &x, &y, white);
+        if (error) { printf("DRAWGLYPHFAIL\n"); status.fails++; break; }
+        else {
+          if (!havetopleft)
+            { havetopleft = 1; status.topleft = ch; }
+          break; // done
+        }
+      } while (0);
+      FT_Done_Glyph(glyph);
+    } else {
+      // SLOT FORMAT
+      printf("slotformat: %d\n", slot->format);
+      printf("error: %d\n", error);
+      status.fails++;
+      break;
+    }
+*/
+
+//    error = FTDemo_Draw_Index(handle, display, glyphix, &x, &y);
+//    if (error) { printf("DRAWINDEXFAIL\n"); status.fails++; break; }
+
+
+/*
+    if (!havetopleft) // firstchaaaaaar
+      { havetopleft = 1; status.topleft = ch; }
+    // INT width = size->metrics.max_advance >> 6;
+    //INT width = size->metrics.advance.x >> 6;
+    INT width = slot->advance.x >> 6; // <------------
+    if (x + width >= display->bitmap->width) {
+      // wrap to start of next line ....
+      x = xstart;
+      y += ystep;
+    } else { x += width; }
+*/
+//  }
+//  return 0; // GET INDEX ERROR ?return error;
+//}
+
+typedef struct _Context {
+  Textbox *textbox;
+  Text text;
+  Cursor cursor;
+  Highlight highlight;
+} Context;
+
+const Context NoContext = {    textbox: NULL,
+                                  text: { NULL, NULL, NULL },
+                             highlight: NoHighlight           };
+
+//typedef struct _Connection {
+//  Context previous;
+//  Context *here;
+//} Connection;
+
+//Connection thistolast = { previous: NoContext, here: NULL };
+// Connection thistolast = { previous: nocontext(), this: &thistolast.previous };
+
+
+//Connection thistolast = { (Context){ 0 }, &(this).previous }; // <-- C needs self-referencing
+// if here == &previous, this is a self-reference... previous needs to be defined, but that
+// requires defining textstring and highlight, which requires defining translations which
+// requires defining ZHUTOU which is too much effort so hopefully it accepts { 0 }
+// currentcontext needs to start with the startofnewtextbox cursor. that cursor should blink                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
+
+// but really ... we're instantiating an empty object ...
+// if here is a pointer, two lists exist. if anything, previous ..
+// should be enough to refer to different part of same text pointer
+// but for undo function ....................................
+// ...absolutely everything must be reversible
+// undocache is first size boundary tester
+
+
+//#define newcontext() \
+//  { textstring: NULL, highlight: NoHighlight, textbox: NULL }
+//(Highlight){ 0, 0, 0, 2, 10, 0, 0, 0, NEWCOLOUR } }
+// Context newcontext_ = newcontext();
+//const Context newcontext_ = newcontext();
+//Context currentcontext = newcontext_; // initialiser element is not constant
+// suddenly we have to initialise /everything/
+
+static char hasnocontext(Context *c) {
+  return (c->text.string && c->textbox) ? 0 : 1;
+} // it'll have context once a string and textbox is attached
+
+// currentcontexts need to be copied into list memory for the undo tree
+// can store in RAM and later add a save/automate function
+
+// |mm|-> extend, |mm|<- unextend
+// <-|mm| unclip, ->|mm| clip
+// undo undo undo undo
+//   save redo tree as ... [redothesethings.txt] keep context relative
+
+
+// Highlight extendmnemonichighlight(Textstring *textstring) {
+  // grab another mnemonic ... zhu -> zhu tou
+//
+// }
+// Highlight unextendmnemonichighlight(Textstring *textstring) {
+  // ungrab another mnemonic ... zhu tou -> zhu
+// }
+// Highlight clipmnemonichighlight(Textstring *textstring) {
+  // snip off first mnemonic ... zhu tou -> tou
+// }
+// auto-spaces a separate function -- wodezhongwenbushuohenhao
+//Highlight unclipmnemonichighlight(Textstring *textstring) {
+// return 1 if normal change, return 0 for beep
+CH unclipmnemonichighlight(Context *context) {
+  // unsnip off first mnemonic ... tou -> zhu tou
+  Highlight highlight = context->highlight;
+  CS text = context->text.string;
+  CS here = context->text.cursorend;
+  // shift+left moves the end of the cursor, start stays
+  CS washere = here;
+  IF (!text || !here) {
+    printf("NO STRING ATTACHED\n");
+    return 0; // no string attached
+  }
+  IF (here > text && *(here - 1) == ' ') {
+    // zhu [tou]
+    // zhu tou []
+    // in both these cases, add the space to the highlight
+    INC highlight.charsbefore;
+    DEC here;
+  } // what to do at line crossings ?
+  WI (1) { // continue until break
+    IF (here <  text) { printf("CURSOR OUTOFLOWBOUND\n"; return 0; }
+    EF (here == text) { break; } // reached start of string
+    EL { // increment left side of highlight
+      CH prevchar = *(here - 1);
+      IF (prevchar == ' ' ) { break; } // reached a space
+      EF (prevchar == '\n') { break; } // reached a linebreak
+      EF (prevchar >= 'A' && prevchar <= 'Z') {
+        INC highlight.charsbefore;
+        DEC here;
+      } EF (prevchar >= 'a' && prevchar <= 'z') {
+        INC highlight.charsbefore;
+        DEC here;
+      } EF (prevchar >= '0' && prevchar <= '9') {
+        INC highlight.charsbefore;
+        DEC here;
+      } EL {
+        INC highlight.charsbefore;
+        DEC here;
+        break; // stop after each symbol
+      }
+    }
+  }
+//  context->textstring.startpointer  = text; // unchanged
+  highlight.startpoint = here;
+  IF (!highlight.endpoint) {
+    highlight.endpoint = washere;
+  } // else retain existing endpoint
+  highlight.cursorpoint = here;
+  alignhighlight(&highlight, context->textbox);
+  highlight.menu = translationmenu(highlight);
+// update leftwidth and rightwidth
+// update colour to reflect open menu
+  IF HASNOTRANSLATIONS(highlight.menu) {
+    highlight.colour = YELLOWCOLOUR;
+  } EL { highlight.colour = CYANCOLOUR; }
+  context->text.cursorend = here;
+  context->highlight = highlight;
+}
+
+// TODO: CONTINUE HERE UNTIL CUTE AWOO HIGHLIGHT MENU FUNCTION
+
+
+//CH stringtailmatchesmnemonic(Textstring *textstring) {
+// grab the first mnemonic starting at the textstring pointer
+
+// return a replacement Highlight object
+// also manipulates textstring ...? no ...
+//  not until translate()
+
+/*
+Highlight mnemonichighlight(Textstring *textstring) { // <- pass pointer so textstring can be manipulated
+// previouscontext ...................
+// mnemonichighlight needs .....
+  Textstring *previousstring = currentcontext.textstring;
+  IF (previousstring != textstring) { // change of context (far away)
+    printf("CHANGE OF CONTEXT\n");
+    printf("NO HANDLING\n");
+  } // mnemonics are multipart, use TEXTSTRINGEQ
+  // currentcontext.highlight
+
+  Highlight highlight = newcontext_.highlight; // but wherever the cursor currently is...
+
+// cursor moves to where textstring is .............
+// width is one mnemonic
+
+//  highlight.charsbefore = 0;
+//  highlight.charsafter  = 0;
+//  highlight.leftwidth   = 0;  // one char wide if in overwrite mode (who would be)
+//  highlight.rightwidth  = 2;  // indicate forward context (for contextual reasons)
+//  highlight.height      = 10; // lineheight of the line the cursor is on (depends on size of largest glyph)
+  CS wordend = textstring->cursorpointer;
+  CS textstart = textstring->stringpointer;
+//  highlight.startpoint  = wordend;
+//  highlight.endpoint    = wordend;
+//  highlight.cursorpoint = wordend;
+//  highlight.colour      = NOCOLOUR;
+//  highlight.menu        = notranslations();
+  IF (*wordend == NUL && wordend == textstart) { return highlight; } // empty textstring
+// returns defaulthighlight for an empty string ^^^^^^^^^^^^^^^^^^^
+// highlight string will be empty
+
+
+  // if wordend == textstring->stringpointer, cursor is at the start
+  // it does not mean that the cursor has no highlight content
+  DO { // first iteration does not decrement for case at start of word/string
+    IF (wordend < textstring->cursorpointer && *wordend == NUL) {
+      printf("UNEXPECTED NUL IN STRING SEARCH\n"); // not expected unless first iteration
+    } EF (wordend == textstart OR *(wordend - 1) == ' ') {
+      CS word = wordend;
+      highlight.startpoint = word;
+      wordend = textstring->cursorpointer;
+      WI (*wordend != NUL && *wordend != ' ')
+        { INC wordend; INC highlight.charsafter; }
+      highlight.endpoint = wordend;
+      CH wordendchar = *wordend;
+      *wordend = '\0';
+      CH isalluppercase = 1;
+      CS uppercasech = word - 1;
+      WI (INC word < wordend) {
+        IF (*word < 'A' || *word > 'Z')
+          { isalluppercase = 0; break; }
+      }
+      IF (isalluppercase) {
+        Translations trlist = translatemnemonic(word);
+//        CST symbol = translatemnemonic(word);
+        IF (trlist.first.sequence != ZHUTOU) {
+          highlight.colour = GREENCOLOUR;
+          highlight.menu = trlist;
+          // open menu of matching translations
+        } EL { highlight.colour = YELLOWCOLOUR; }
+      } EL { highlight.colour = NOCOLOUR; }
+      // replace word with unicode string
+      // .... no that's later ....
+      // if this word is all caps, /try/ to translate it -- failure is possible
+      *wordend = wordendchar;
+      return highlight;
+    } EL { INC highlight.charsbefore; }
+  } WI (DEC wordend);
+  printf("UNEXPECTED LOOP FAILURE\n");
+  currentcontext.highlight = highlight;
+  return currentcontext; // updated string becomes current context
+}
+*/
+
+
+#define TEXTMODE     0
+#define COMMANDMODE  1
+INT processmode = TEXTMODE;
+INT processfont = 0; // only set if less than numfonts? cannot know limit ...
+
+//SINT processevent(grEvent event, Textstring *textstring) {
+SINT processevent(grEvent event, Context *context) {
+/*
+  grEvent event;
+  INT ret = 1;
+  if (*status.keys) {
+    event.key = grKEY(*status.keys++);
+  } else {
+    grListenSurface(display->surface, 0, &event);
+    if (event.type == gr_event_resize) {
+      status.update = 1;
+      return ret;
+    }
+  }
+  status.update = 0;
+  if (status.rendermode == (INT)(event.key - '1')) {
+    return ret; // already in the current mode
+  } else if (event.key >= '1' && event.key < '1' + N_RENDER_MODES) {
+    status.rendermode = (INT)(event.key - '1');
+    event_render_mode_change(0);
+    status.update = 1;
+    return ret;
+  } else if (event.key >= 'A' && event.key < 'A' + LCDModesLEN) {
+    INT lcdix = (INT)(event.key - 'A');
+    if (status.lcdix == lcdix) { return ret; } // already in the current mode
+    handle->lcd_mode = LCDModes[lcdix];
+// consider just handle->lcd_mode = LCD_MODE_AA; // 0 == monochrome ?
+    return ret;
+  } else 
+*/
+  INT ret = 1;
+  if (event.type == gr_event_resize) {
+    printf("RESIZE EVENT\n");
+  } else if (event.type & gr_event_mouse == gr_mouse_move) {
+    printf("MOUSE IS MOVING\n");
+  } else if (event.key == grKeyEsc) {
+    if (processmode == TEXTMODE) {
+      // if a menu is open, close the menu, else:
+      processmode = COMMANDMODE;
+    } else {
+// window close event is mousedown? set ret = 0; instead ? (double-x to quit)
+      processmode = TEXTMODE;
+    }
+  } else if (processmode == TEXTMODE) {
+    Text *textp = &(context->text);
+//    if        (event.key >= grKEY('a') && event.key <= grKEY('z')) {
+    if        (grKEY(event.key) >= 'a' && grKEY(event.key) <= 'z') {
+      appendtextstring(textp, grKEY(event.key) - 'a' + 'a');
+    } else if (grKEY(event.key) >= 'A' && grKEY(event.key) <= 'Z') {
+      appendtextstring(textp, grKEY(event.key) - 'A' + 'A');
+    } else if (grKEY(event.key) >= '0' && grKEY(event.key) <= '9') {
+      appendtextstring(textp, grKEY(event.key) - '0' + '0');
+    } else if (grKEY(event.key) == grKeyBackSpace) {
+      appendtextstring(textp, '\b');
+    } else if (grKEY(event.key) == grKeySpace) {
+      appendtextstring(textp, ' ');
+
+    // if a menu is open, up and down is in menu ....
+    // else move up or down a line
+
+    } else if (grKEY(event.key) == grKeyUp) {
+//TODO      highlightpreviousmenuitem();
+    } else if (grKEY(event.key) == grKeyDown) {
+//TODO      highlightnextmenuitem();
+    } else if (grKEY(event.key) == grKeyLeft) {
+      if (event.key & grKeyShift) {
+        // moves left in words
+        unclipmnemonichighlight(context);
+      // else move left in utf chars
+      } // else { cursormoveleft(); }
+//    } else if (grKEY(event.key) == grKeyRight) {
+    } else if (grKEY(event.key) == grKeyReturn) {
+//      if (event.key & grKeyShift) {
+//        // shift+return opens or closes the menu
+//        if (currentmenu == ZHUTOU) { // (nomenu)
+//          currentmenu = 
+//      } else {
+//        // if menu is open, confirm translation
+//        // otherwise, write a linebreak
+//      }
+//      // shift+return to not open menu? or always open menu ....
+////
+////        currentmenu = highlight(wordatcursor);
+//// is currentmenu a Highlight > > ?
+////        currentmenu = 
+//      } else {
+      appendtextstring(context->text, '\n');
+
+      // SHIFT+RETURN DOES WHAT ?
+    } else if (event.key == grKeyPlus       || event.key == grKeyLess       ||
+               event.key == grKeyEqual      || event.key == grKeyMult       ||
+               event.key == grKeyDollar     || event.key == grKeySmaller    ||
+               event.key == grKeyGreater    || event.key == grKeyQuestion   ||
+               event.key == grKeyComma      || event.key == grKeyDot        ||
+               event.key == grKeySemiColon  || event.key == grKeyColon      ||
+               event.key == grKeyDiv        || event.key == grKeyExclam     ||
+               event.key == grKeyPercent    || event.key == grKeyLeftParen  ||
+               event.key == grKeyRightParen || event.key == grKeyAt         ||
+               event.key == grKeyLeftB      || event.key == grKeyBackSlash  ||
+               event.key == grKeyRightB     || event.key == grKeyCircumflex ||
+               event.key == grKeyUnder      || event.key == grKeyBackTick     ) {
+      appendtextstring(textstring, event.key);
+    } else if (event.key == '"') {
+      appendtextstring(textstring, '"');
+    } else if (event.key == '\'') {
+      appendtextstring(textstring, '\'');
+    } else if (event.key == '{') {
+      appendtextstring(textstring, '{');
+    } else if (event.key == '}') {
+      appendtextstring(textstring, '}');
+    }
+  } else if (processmode == COMMANDMODE) {
+    if (event.key == grKEY('q')) {
+      ret = 0; // exit event processing loop
+    } else if (event.key >= grKEY('0') && event.key <= grKEY('9')) {
+      processfont = event.key - grKEY('0');
+      printf("PROCESSFONT = %d\n", processfont);
+    }
+  }
+//    printf("LCDIX!!\n");
+//    INT lcdixdelta = (event.key == grKEY('L')) ? 1 : -1;
+//    status.lcdix = (status.lcdix + lcdixdelta + LCDModesLEN) % LCDModesLEN;
+//    handle->lcd_mode = LCDModes[status.lcdix];
+//    FTDemo_Update_Current_Flags(handle);
+//    status.update = 1;
+  // grKeySpace
+  // grKeyBackSpace
+  // grKeyTab
+//  } else if (event.key == grKEY('R') || event.key == grKEY('r')) {
+    // event_radius_change
+    // event_size_change
+ // } // else { }
+  return ret;
+}
+
+static struct setup_ {
+  UNT ttiversion;
+  INT dispwidth;
+  INT dispheight;
+  INT dispmode;
+//  INT dispres;
+  INT dispgreys;
+  grSurface *surface;
+  grBitmap  *surfacebmp;
+} setup = {
+  0                  , // ttinterpreterversion
+  800                , // dispwidth
+  600                , // dispheight
+  gr_pixel_mode_rgb24, // dispdepth
+//  72                 , // dispres (ppi? not used?)
+  256                , // dispgreys
+  NULL                 // surfacebmp
+};
+
+int main(int argc, char **argv) {
+  FT_Library ftlib;
+  if (FT_Init_FreeType(&ftlib) != 0)
+    { printf("FREETYPEINITFAIL\n"); return 1; }
+  ELSEDO // FreeType is initialised
+  FT_Int major, minor, patch;
+  FT_Library_Version(ftlib, &major, &minor, &patch);
+  FT_Property_Get(ftlib, "truetype", "interpreter-version", &setup.ttiversion);
+  printf("FreeType v%d.%d(.%d)\n", major, minor, patch);
+  printf("TrueType interpreter v%d\n", setup.ttiversion);
+
+  grInitDevices();
+ 
+  grBitmap scrbuf;
+  scrbuf.mode  = setup.dispmode  ;
+  scrbuf.width = setup.dispwidth ;
+  scrbuf.rows  = setup.dispheight;
+  scrbuf.grays = setup.dispgreys ; 
+  setup.surface = grNewSurface(0, &scrbuf);
+  if (!setup.surface) { printf("NEWSURFACEFAIL\n"); break; }
+  setup.surfacebmp = &setup.surface->bitmap;
+  printf("scrbuf&: %12lx, surfacebmp: %12lx\n",
+           (unsigned long)(void *)&scrbuf,
+           (unsigned long)(void *)setup.surfacebmp);
+  printf("default GAMMA: %f\n", GAMMA);
+    // grSetTargetGamma(bsurface, GAMMA);
+  // expect v35, v38 or v40
+//  handle = FTDemo_New(); <------------------------------
+//  FT_Property_Get(/*handle->*/ftlib, "cff",   "hinting-engine", &status.cffhint);
+//  FT_Property_Get(/*handle->*/ftlib, "type1", "hinting-engine", &status.type1hint);
+//  FT_Property_Get(/*handle->*/ftlib, "t1cid", "hinting-engine", &status.t1cidhint);
+// expect FT_HINTING_FREETYPE or FT_HINTING_ADOBE
+
+//  render_state_init(state, display, library);
+//  if (dispres > 0)
+//    { render_state_set_resolution(state, (UNT)dispres); }
+  // render_state_set_size
+  // render_state_set_files
+// later: warping
+  // later: FTDemo_Set_Preload(handle, 1); <-------
+
+
+// TODO: ILLBEBACK
+
+  Textbox textbox = newtextbox(DEFAULTTEXTMARGINX, DEFAULTTEXTMARGINY,
+    FONT0PATH, DEFAULTFONTWIDTH, DEFAULTFONTHEIGHT);
+// TODO: dynamic textstring malloc
+  textboxaddfont(&textbox, FONT1PATH, EMOJIFONTWIDTH, EMOJIFONTHEIGHT);
+  textboxaddfont(&textbox, FONT2PATH, LANGUAGEFONTWIDTH, LANGUAGEFONTHEIGHT);
+
+
+
+  Context context;
+  context.textbox   = &textbox;
+  context.text.string      = textbox.textstring;
+  context.text.cursorstart = textbox.textstring;
+  context.text.cursorend   = textbox.textstring;
+  context.highlight = NoHighlight;
+//#define MAXFONTS  10
+//  FT_Face fontface[MAXFONTS];
+//  CST fontnames[MAXFONTS];
+//  INT numfonts = 3;
+//  fontnames[0] = FONT0PATH;
+//  fontnames[1] = FONT1PATH;
+//  fontnames[2] = FONT2PATH;
+//  INT fontix = -1;
+//  WI (INC fontix LT numfonts) {
+//    CST fontfile = fontnames[fontix];
+//  }
+//  if (error) {
+//    printf("ERROR LOADING FONTS\n");
+//  } ELSEDO
+
+  // if textbox failed to load, don't continue .....
+
+//  CST fontfile = FONT0PATH;
+//  INT faceindex = 0; // index 0 unless multi-face (or -1) ?
+//  FT_Face fontface;
+//  error = FT_New_Face(ftlib, fontfile, fontix, &fontface[fontix]); // -1 ??
+//  if (error) { printf("FONT0NEWFACEFAIL\n"); break; }
+//  ELSEDO
+  // can set size later .....?
+/*
+  if (argc < 2) {
+//    printf("SIZE arg required\n");
+    status.ptsize = 32.0 * 64.0;
+  } else {
+    status.ptsize = (INT)(atof(argv[1]) * 64.0);
+  }
+*/
+// instead of FT_Set_Char_Size(face, bla, (FT_F26Dot6)(PIXELSIZE * 64.0), 0, RESOLUTION); <-----
+
+//  long numfaces = fontface->num_faces;
+//  error = FTDemo_Install_Font(handle, fontfile, 0, 0);
+//  if (error || handle->num_fonts < 1) {
+//    printf("failed to open font\n");
+//    return 1;
+//  }
+//  display = FTDemo_Display_New(status.device, status.dims);
+//  if (!display) {
+//    printf("failed to create a surface\n");
+//    return 2;
+//  } else {
+//  }
+  // grSetTitle(adisplay->surface, "...."); ???????????? same thing same surface
+
+//  grSetTitle(display->surface, "ZHUTOU");
+  grSetTitle(setup.surface, "ZHUTOU");
+//  FTDemo_Icon(handle, display); // TODO: TRY THIS LATER TO SEE IF IT WORKS
+  //FTDemo_Display_Clear(display);
+  status.fails = 0;
+//  FTDemo_Set_Current_Font(handle, handle->fonts[0]);
+//  FTDemo_Set_Current_Charsize(handle, status.ptsize, status.res);
+//  FTDemo_Update_Current_Flags(handle);
+//  INT loadflags = 
+//  loadflags |= FT_LOAD_NO_HINTING;
+//  loadflags |= FT_LOAD_FORCE_AUTOHINT;
+//  loadflags |= FT_LOAD_NO_BITMAP;
+//  loadflags |= FT_LOAD_COLOR;
+//  loadflags |= FT_LOAD_TARGET_NORMAL; // or _MONO or _LIGHT or _LCD or _LCD_V
+//  loadflags |= FT_LOAD_MONOCHROME if FT_LOAD_TARGET_MONO
+  // status.offset = handle->current_font->num_indices;
+//  grRefreshSurface(display->surface);
+  // rendertext should know about all fonts
+  // processfont is the default font index
+//  CH textdata[256];
+//  Textstring textstring = { stringpointer: textdata, cursorpointer: textdata };
+
+//  textbox.textstring
+//  currentcontext ....
+//  initial highlight ...
+
+  writetextstring(&context.text, "Hello, World!");
+//  currentcontext.textbox = &textbox;
+
+
+  grEvent grevent;
+  //grListenSurface(display->surface, gr_event_key, &dummyevent);
+  do {
+    if (!status.update) { continue; } // <--- undelayed infinite loop
+//    FTDemo_Display_Clear(display);
+    grColor surfacezerocolour = grFindColor(setup.surfacebmp, 127, 127, 127, 255);
+    grColor surfacebgcolour = grFindColor(setup.surfacebmp, 0, 0, 255, 127);
+    if (processmode == COMMANDMODE) {
+      surfacebgcolour = grFindColor(setup.surfacebmp, 0xFF, 0xCC, 0x33, 127);
+    }
+//{ 0xAA };
+//    grFillRect(display->bitmap, 0, 0, 640, 480, white); //display->warn_color);
+    grFillRect(setup.surfacebmp, 0, 0, setup.dispwidth, setup.dispheight, surfacezerocolour); //display->warn_color);
+    grFillRect(setup.surfacebmp, 0, 0, scrbuf.width, scrbuf.rows, surfacebgcolour); //display->warn_color);
+//    grFillRect(setup.surfacebmp, 0, 0, 640, 420, surfacebgcolour); //display->warn_color);
+
+
+//    if (processfont >= 0 && processfont < numfonts) {
+//      printf("RENDER WITH FONTFACE[%d]\n", processfont);
+//    error = rendertext(setup.surfacebmp, &fontface[processfont]); // , Text); // add properties parameter
+//      Textbox textbox = { fontlist: fontface, numfonts: numfonts, fontindex: processfont,
+//                          DEFAULTFONTSIZE, DEFAULTTEXTMARGIN, textstring: textstring.stringpointer };
+//textstring: textstring      };
+     
+
+// as well as highlight.leftwidth and highlight.rightwidth
+// we also need to calculate where the cursor will be ... and that
+// can't be done without rendertext .. so rendertext can return
+// cursor x,y position ....
+// shift+arrow moves the cursor ...
+// so ... can't highlight without render ?
+// tou|   +<  |tou|   leftwidth == 0, rightwidth == tou-width
+// rendertext will update the cursor position but we can anticipate
+// the offset ...............
+   
+// renderhighlight can get the old cursor position, know it moved
+// left because leftwidth is 0 (consider if it moves right within
+//  the highlight, neither leftwidth nor rightwidth will be 0)
+// but....... from where to where ...........
+// so then highlight has to fake render until cursor position,
+// just to work out where it is ....
+// currentline would mean only calculating cursor column (x position)
+// even in multiline select, there's only one cursorlineindex ..
+
+//    cursorlineindex = 0; <-- on first line, cursor y is 0
+//    cursorlineindex = 1; <-- on second line, cursor y is lineheight
+// thus no need for rendertext to keep an old position
+// except to redraw the cursor on top of the text ...
+
+    grFillRect(setup.surfacebmp, 0, 0, scrbuf.width, scrbuf.rows, surfacebgcolour); //display->warn_color);
+
+^^^^^^^^^^
+      renderhighlight();
+
+      error = rendertext(setup.surfacebmp, textbox);
+
+      if (error) { printf("RENDERTEXT ERROR\n"); return 3; } // <- unsafe exit.. break?
+
+
+
+    // } else { printf("PROCESSFONT NONINDEX\n"); }
+    //grRefreshSurface(display->surface);
+    grRefreshSurface(setup.surface);
+    grListenSurface(setup.surface, 0, &grevent);
+//    grListenSurface(display->surface, 0, &grevent);
+    if (grevent.type == gr_event_resize) {
+      printf("THIS IS A RESIZE\n");
+      // resize event or any other should trigger redraw by loop iteration
+      // better to process resize event here ...
+    }
+  } while (processevent(grevent, &textstring));
+  if (status.fails > 0) {
+    printf("status.fails: %d\n", status.fails);
+  }
+//  FTDemo_Display_Done(display);
+//  FTDemo_Done(handle);
+
+// so.... we need a prompt so we can keep typing ......
+
+//  AFTERDO {
+//    INT donefontix = -1;
+//    WI (INC donefontix < numfonts) {
+//      printf("FTDONEFONT%d\n", donefontix);
+//      FT_Done_Face(fontface[donefontix]);
+//    }
+//  }
+  freetextbox(&textbox); // free fonts and textstring
+
+  AFTERDO { FT_Done_FreeType(ftlib); }
+  ftlib = NULL;
+  exit(0);
+  return 0;
+}
+#endif
+
+    /*
+    */
+//  }
+//  // FT_Free_Glyph to counter FT_Load_Glyph?
+//  return error;
+//}
+
+//SERT Render_Fancy(
+

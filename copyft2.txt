@@ -1,0 +1,15 @@
+# run using . copyft2.txt
+out=ft2.tar.gz
+if [ -f "$out" ] ; then
+  echo "$out exists"
+  ls -l $out
+elif [ -e "$out" ] ; then
+  echo "$out exists, not as file"
+  ls -l $out
+else
+  cmd=tar\ -zcvf
+  src=../ft2
+  $cmd $out $src
+  ls -l $out
+fi
+
